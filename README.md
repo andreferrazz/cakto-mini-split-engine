@@ -2,6 +2,10 @@
 
 API para cálculo de taxas de plataforma, split de recebíveis e persistência de pagamentos com ledger entries e outbox events.
 
+## Pull Request
+
+https://github.com/andreferrazz/cakto-mini-split-engine/pull/1
+
 ## Setup
 
 ```bash
