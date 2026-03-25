@@ -13,7 +13,7 @@ class Payment(models.Model):
         CARD = "CARD"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.CONFIRMED)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     gross_amount = models.DecimalField(max_digits=15, decimal_places=2)
     fee_amount = models.DecimalField(max_digits=15, decimal_places=2)
     net_amount = models.DecimalField(max_digits=15, decimal_places=2)
@@ -40,7 +40,7 @@ class LedgerEntry(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["-amount"]
+        ordering = ["-created_at"]
 
     def __str__(self):
         return f"Ledger {self.recipient_id}: {self.amount}"
@@ -52,6 +52,9 @@ class OutboxEvent(models.Model):
         PUBLISHED = "PUBLISHED"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment = models.ForeignKey(
+        Payment, on_delete=models.CASCADE, related_name="outbox_events", null=True
+    )
     event_type = models.CharField(max_length=100)
     payload = models.JSONField()
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)

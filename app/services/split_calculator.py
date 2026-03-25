@@ -10,7 +10,7 @@ def calculate_platform_fee(method: str, installments: int, gross: Decimal) -> De
     elif installments == 1:
         rate = Decimal("3.99")
     else:
-        rate = Decimal("4.99") + 2 * (installments - 1)
+        rate = Decimal("4.99") + Decimal("2") * (installments - 1)
 
     fee = (gross * rate / 100).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
     return fee
@@ -37,7 +37,6 @@ def calculate_splits(net: Decimal, splits: list[dict]) -> list[dict]:
             "amount": Decimal("0"),
         })
 
-    # Calculate amounts for all non-largest recipients first
     allocated = Decimal("0")
     for i, r in enumerate(results):
         if i == largest_idx:
@@ -46,7 +45,6 @@ def calculate_splits(net: Decimal, splits: list[dict]) -> list[dict]:
         r["amount"] = amount
         allocated += amount
 
-    # Assign remainder to largest recipient
     results[largest_idx]["amount"] = net - allocated
 
     return results

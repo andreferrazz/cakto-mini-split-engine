@@ -2,7 +2,7 @@ import hashlib
 import json
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -16,8 +16,8 @@ from app.models import LedgerEntry, OutboxEvent, Payment
 from app.services.split_calculator import calculate_platform_fee, calculate_splits
 
 
-def _compute_payload_hash(data: dict) -> str:
-    canonical = json.dumps(data, sort_keys=True, default=str)
+def _compute_payload_hash(validated_data: dict) -> str:
+    canonical = json.dumps(validated_data, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -34,18 +34,7 @@ def create_payment(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    payload_hash = _compute_payload_hash(request.data)
-
-    # Check for existing payment with same idempotency key
-    existing = Payment.objects.filter(idempotency_key=idempotency_key).first()
-    if existing:
-        if existing.payload_hash != payload_hash:
-            return Response(
-                {"detail": "Idempotency-Key already used with a different payload."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        out = PaymentOutputSerializer(existing)
-        return Response(out.data, status=status.HTTP_200_OK)
+    payload_hash = _compute_payload_hash(data)
 
     gross = data["amount"]
     method = data["payment_method"]
@@ -55,45 +44,58 @@ def create_payment(request):
     net = gross - fee
     split_results = calculate_splits(net, data["splits"])
 
-    with transaction.atomic():
-        payment = Payment.objects.create(
-            gross_amount=gross,
-            fee_amount=fee,
-            net_amount=net,
-            payment_method=method,
-            installments=installments,
-            currency=data["currency"],
-            idempotency_key=idempotency_key,
-            payload_hash=payload_hash,
-        )
-
-        for s in split_results:
-            LedgerEntry.objects.create(
-                payment=payment,
-                recipient_id=s["recipient_id"],
-                role=s["role"],
-                amount=s["amount"],
+    try:
+        with transaction.atomic():
+            payment = Payment.objects.create(
+                gross_amount=gross,
+                fee_amount=fee,
+                net_amount=net,
+                payment_method=method,
+                installments=installments,
+                currency=data["currency"],
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
             )
 
-        OutboxEvent.objects.create(
-            event_type="payment.created",
-            payload={
-                "payment_id": str(payment.id),
-                "gross_amount": str(payment.gross_amount),
-                "fee_amount": str(payment.fee_amount),
-                "net_amount": str(payment.net_amount),
-                "payment_method": payment.payment_method,
-                "installments": payment.installments,
-                "splits": [
-                    {
-                        "recipient_id": s["recipient_id"],
-                        "role": s["role"],
-                        "amount": str(s["amount"]),
-                    }
-                    for s in split_results
-                ],
-            },
-        )
+            LedgerEntry.objects.bulk_create([
+                LedgerEntry(
+                    payment=payment,
+                    recipient_id=s["recipient_id"],
+                    role=s["role"],
+                    amount=s["amount"],
+                )
+                for s in split_results
+            ])
+
+            OutboxEvent.objects.create(
+                payment=payment,
+                event_type="payment.created",
+                payload={
+                    "payment_id": str(payment.id),
+                    "gross_amount": str(payment.gross_amount),
+                    "fee_amount": str(payment.fee_amount),
+                    "net_amount": str(payment.net_amount),
+                    "payment_method": payment.payment_method,
+                    "installments": payment.installments,
+                    "splits": [
+                        {
+                            "recipient_id": s["recipient_id"],
+                            "role": s["role"],
+                            "amount": str(s["amount"]),
+                        }
+                        for s in split_results
+                    ],
+                },
+            )
+    except IntegrityError:
+        existing = Payment.objects.get(idempotency_key=idempotency_key)
+        if existing.payload_hash != payload_hash:
+            return Response(
+                {"detail": "Idempotency-Key already used with a different payload."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        out = PaymentOutputSerializer(existing)
+        return Response(out.data, status=status.HTTP_200_OK)
 
     out = PaymentOutputSerializer(payment)
     return Response(out.data, status=status.HTTP_201_CREATED)
